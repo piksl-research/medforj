@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=61.0", 'tomli;python_version<"3.11"']
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "medforj"
+dynamic = ["version"]
+description = "Diffusion-Driven Generation of Minimally Preprocessed Brain MRI"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "Apache-2.0"}
+authors = [
+    {name = "JH-MIPC", email = "jhmipc@jh.edu"},
+]
+urls = { "Homepage" = "https://github.com/piksl-research/medforj" }
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "einops",
+    "matplotlib",
+    "monai @ git+https://github.com/Project-MONAI/MONAI.git@7c26e5af385eb5f7a813fa405c6f3fc87b7511fa#egg=monai",
+    "nibabel",
+    "numpy",
+    "tqdm",
+    "torch>=2.0.0",
+    "wandb",
+]
+
+[tool.setuptools.packages.find]
+include = ["medforj"]
+
+[miniver]
+package_path = "medforj"

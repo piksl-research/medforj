@@ -21,13 +21,9 @@ python demo.py --out-fpath {MY_IMG.nii.gz} --weight-fpath {WEIGHTS.pt} --predict
 
 Choose the `prediction_type` according to the pre-trained weights used.
 
-The EMA weights will be available soon:
+The EMA weights are available on HuggingFace:
+[https://huggingface.co/piksl-research/medforj-brain-t1w-3d](https://huggingface.co/piksl-research/medforj-brain-t1w-3d)
 
-| Prediction Type | HuggingFace Repo |
-| --- | --- |
-| Sample | COMING SOON |
-| Velocity | COMING SOON |
-| Flow | COMING SOON |
 
 ## Training your own model
 

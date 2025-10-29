@@ -26,11 +26,14 @@ from medforj.scheduler import *
 
 set_determinism(42)
 
+def to_np(tensor):
+    return tensor.detach().cpu().numpy()
+
 def sample(model, inferer, device, noise=None, verbose=True):
     with torch.inference_mode(), autocast(device_type="cuda", enabled=True):
         if noise is None:
             noise = torch.randn((1, 1, 192, 224, 192), device=device)
-        img = inferer.sample(input_noise=noise[i:i+1], diffusion_model=model, verbose=verbose)
+        img = inferer.sample(input_noise=noise, diffusion_model=model, verbose=verbose)
     return img.squeeze()
 
 def to_nib_vol(x):
@@ -96,4 +99,7 @@ def main(args=None):
     inferer = DiffusionInferer(scheduler)
 
     img = to_np(sample(model, inferer, device, verbose=args.verbose))
-    to_nib_vol(img).to_filename(out_fpath)
+    to_nib_vol(img).to_filename(args.out_fpath)
+    
+if __name__ == "__main__":
+    main()

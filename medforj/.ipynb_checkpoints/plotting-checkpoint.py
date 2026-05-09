@@ -52,14 +52,13 @@ def lightbox(x):
             axs[row, col].axis("off")
 
     plt.subplots_adjust(hspace=0, wspace=0)
-    plt.show()
 
-    # # Save figure to a buffer
-    # buffer = io.BytesIO()
-    # plt.savefig(buffer, format="png", bbox_inches="tight")
-    # plt.close(fig)  # Close the figure to free memory
-    # buffer.seek(0)
+    # Save figure to a buffer
+    buffer = io.BytesIO()
+    plt.savefig(buffer, format="png", bbox_inches="tight")
+    plt.close(fig)  # Close the figure to free memory
+    buffer.seek(0)
 
-    # image = Image.open(buffer)
+    image = Image.open(buffer)
 
-    # return image
+    return image

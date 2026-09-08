@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "medforj"
-dynamic = ["version"]
-description = "Diffusion-Driven Generation of Minimally Preprocessed Brain MRI"
+version = "1.0.0"
+description = "MedForj: An open, large-scale foundational generative prior for high-resolution 3D brain MRI"
 readme = "README.md"
 requires-python = ">=3.11"
 license = {text = "Apache-2.0"}
@@ -31,6 +31,3 @@ dependencies = [
 
 [tool.setuptools.packages.find]
 include = ["medforj"]
-
-[miniver]
-package_path = "medforj"

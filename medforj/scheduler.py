@@ -23,7 +23,7 @@ class DiffusionPredictionType(StrEnum):
     RFLOW = "rflow"    # v = x0 - eps
 
 def reparameterize(
-    x_t, α_sqrt, β_sqrt, model_output,
+    x_t, α_sqrt, β_sqrt, px_output,
     prediction_type,
     clip_min=-1, clip_max=1,
 ):
@@ -32,22 +32,22 @@ def reparameterize(
     the two key terms: x_0_given_t and ε_hat_t.
 
     `RFLOW` and `FLOW` have the same formulation with two changes:
-    (i) The direction was trained differently, so we add the model output (see "whoops" above)
+    (i) The direction was trained differently, so we add the px output (see "whoops" above)
     (ii) The coefficients have different values (not VP)
     """
 
     # Get clean and noisy predictions from time t
     match prediction_type:
         case DiffusionPredictionType.NOISE:
-            x_0_given_t = (x_t - β_sqrt * model_output) / α_sqrt
+            x_0_given_t = (x_t - β_sqrt * px_output) / α_sqrt
         case DiffusionPredictionType.CLEAN:
-            x_0_given_t = model_output + (x_t - x_t.detach()) # straight-through estimation
+            x_0_given_t = px_output + (x_t - x_t.detach()) # straight-through estimation
         case DiffusionPredictionType.VELOCITY:
-            x_0_given_t = α_sqrt * x_t - β_sqrt * model_output
+            x_0_given_t = α_sqrt * x_t - β_sqrt * px_output
         case DiffusionPredictionType.FLOW:
-            x_0_given_t = (x_t - β_sqrt * model_output) / (α_sqrt + β_sqrt)
+            x_0_given_t = (x_t - β_sqrt * px_output) / (α_sqrt + β_sqrt)
         case DiffusionPredictionType.RFLOW: 
-            x_0_given_t = (x_t + β_sqrt * model_output) / (α_sqrt + β_sqrt)
+            x_0_given_t = (x_t + β_sqrt * px_output) / (α_sqrt + β_sqrt)
         case _:
             raise ValueError("Invalid prediction type")
 
@@ -189,9 +189,9 @@ class DiffusionScheduler():
         a_bar = torch.where(t < 0, self.final_alpha_cumprod.to(t.device), a_bar)
         return a_bar**0.5, (1 - a_bar)**0.5
     
-    def step(self, model, t, x_t, eta=0.0, generator=None):
+    def step(self, px, t, x_t, eta=0.0, generator=None):
         with torch.no_grad(), autocast(device_type="cuda", enabled=x_t.is_cuda):
-            model_output = model(x_t, timesteps=torch.full((x_t.shape[0],), t, device=x_t.device))
+            px_output = px(x_t, timesteps=torch.full((x_t.shape[0],), t, device=x_t.device))
     
         s = self.scheduled_neighbor(t)
 
@@ -200,7 +200,7 @@ class DiffusionScheduler():
         a_s, b_s = self.coefficients(s if s >= 0 else -1)
 
         x_0_given_t, ε_hat_t = reparameterize(
-            x_t, a_t, b_t, model_output, self.prediction_type,
+            x_t, a_t, b_t, px_output, self.prediction_type,
             clip_min=self.clip_sample_min, clip_max=self.clip_sample_max,
         )
 
@@ -219,11 +219,10 @@ class DiffusionScheduler():
     
         return x_s.detach()
         
-    def reverse_de(self, x_t, model, eta=0.0, verbose=True, **kwargs):
+    def reverse_de(self, x_t, px, eta=0.0, verbose=True, **kwargs):
         """
         Run the reverse differential equation (loop through all steps)
         """
         for t in tqdm(self.timesteps, disable=not verbose):
-            x_t = self.step(model, t, x_t, eta=eta, **kwargs)
+            x_t = self.step(px, t, x_t, eta=eta, **kwargs)
         return x_t
-    

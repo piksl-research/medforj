@@ -11,203 +11,105 @@ axially oriented image with brain-centered FOV.
 
 This code is intended to be a template and can be
 edited as needed for specific needs.
+
+vRAM appears to peak at around 14 GiB, with LDM on
+nonlinear forward problems. A 16 GiB card is recommended.
 """
 
-# ===== Standard imports =====
 import argparse
 import numpy as np
-import sys
 import nibabel as nib
 from pathlib import Path
-from tqdm.auto import tqdm
-
-# ===== Deep learning =====
 import torch
-from torch.amp import GradScaler, autocast
-from monai.networks.nets import DiffusionModelUNet
-from monai.utils import set_determinism
-
-# ===== Project-specific imports =====
-from medforj.forward_ops import *
-from medforj.inverse_tools import *
-from medforj.scheduler import *
-from medforj.maisi_setup import get_ae, get_maisi_ldm, MaisiConditionedWrapper, get_maisi_scheduler
-
-set_determinism(42)
-
-def to_np(tensor):
-    return tensor.detach().cpu().numpy().squeeze()
-
-def sample(px, scheduler, device, noise=None,
-           ae=None, latent_channels=None, latent_shape=None, verbose=True):
-    with torch.inference_mode(), autocast(device_type="cuda", dtype=torch.float16):
-        if ae is not None:
-            if noise is None:
-                noise = torch.randn((1, latent_channels, *latent_shape), device=device)
-            # The MAISI autoencoder generates intensities in [0, 1]
-            sample_img = scheduler.reverse_de(noise, px, verbose=verbose)
-            sample_img = ae.decode_stage_2_outputs(sample_img)
-            # Bring back to the image domain in [-1, 1]
-            sample_img = sample_img * 2.0 - 1.0
-
-        else:
-            if noise is None:
-                noise = torch.randn((1, 1, 192, 224, 192), device=device)
-            sample_img = scheduler.reverse_de(noise, px, verbose=verbose)
-    return sample_img
-
-def to_nib_vol(x):
-    """
-    Convert the volumetric numpy array to a NIFTI1 Image
-    with the correct affine and orientation.
-    This also quantizes to 16-bit unsigned integer.
-    """
-    header = nib.Nifti1Header()
-    header.set_data_shape(x.shape)
-    header.set_data_dtype(np.uint16)
-    header.set_zooms((1.0, 1.0, 1.0))
-    header['descrip'] = "Synthetic image"
-
-    affine = np.array([
-        [-1, 0, 0, 0],
-        [0, -1, 0, 0],
-        [0, 0, 1, 0],
-        [0, 0, 0, 1],
-    ])
-
-    int_x = ((x - x.min()) / (x.max() - x.min()) * (2**16 - 1)).astype(np.uint16)
-    return nib.Nifti1Image(int_x, affine=affine, header=header)
+from medforj.cli_utils import setup, build_model, get_prediction_type, common_parser, to_np, to_nib_vol
+from medforj.forward_ops import ForwardModel, Identity, SliceSelection, Masking, KSpaceMasking3D, MRIRigidMotion3D
+from medforj.inverse_tools import DPSScheduler, ReSampleScheduler
+from medforj.scheduler import DiffusionScheduler
 
 def solve(px, y, forward_model, scheduler, device, noise=None,
-           ae=None, latent_channels=None, latent_shape=None, verbose=True):
-    if noise is None:
-        noise = torch.randn((1, 1, 192, 224, 192), device=device)
-    sample_img = scheduler.reverse_de(noise, y, forward_model, px, eta=1.0, verbose=verbose)
-    return sample_img
+          ae=None, latent_channels=None, latent_shape=None, verbose=True):
+    if ae is not None:
+        if noise is None:
+            noise = torch.randn((1, latent_channels, *latent_shape), device=device)
+        z_hat = scheduler.reverse_de(noise, y, forward_model, px, verbose=verbose)
+        x_hat = scheduler.decode(z_hat).float()
+        # Bring back to the image domain in [-1, 1]
+        x_hat = (x_hat * 2.0 - 1.0).clamp(-1.0, 1.0)
+    else:
+        if noise is None:
+            noise = torch.randn((1, 1, 192, 224, 192), device=device)
+        x_hat = scheduler.reverse_de(noise, y, forward_model, px, eta=1.0, verbose=verbose).float()
+    return x_hat
 
-weight_root = Path("../weights_archive/ddpm3d").resolve()
-
-weight_fpaths = {
-    "noise":     weight_root / "epsilon" / "model_epoch100.pt",
-    "clean":     weight_root / "sample" / "model_epoch100.pt",
-    "velocity":  weight_root / "velocity" / "model_epoch100.pt",
-    "flow":      weight_root / "flow" / "model_epoch100.pt",
-    "rflow":     weight_root / "rflow" / "model_epoch100.pt",
-    "ldm_rflow": weight_root / "ldm_rflow" / "model_epoch100.pt",
-}
-
-MAISI_weight_dir = Path("../weights_archive/MAISIv1").resolve()
-MAISI_config_fpath = Path("./medforj/config_maisi.json").resolve()
-
-device = torch.device(f"cuda:1")
-
-strategy = "flow"
-
-if strategy in ["noise", "clean", "velocity", "flow", "rflow"]:
-    prediction_type = strategy
-elif strategy == "ldm_rflow":
-    prediction_type = "rflow"
-
-if prediction_type == "ldm_rflow":
-    ae = get_ae(MAISI_weight_dir, MAISI_config_fpath)
-    ae = ae.to(device)
-    ae.eval()
-    for p in ae.parameters():
-        p.requires_grad_(False)
+def main(args=None):
+    parser = argparse.ArgumentParser(parents=[common_parser()])
+    parser.add_argument("--inp-fpath", type=Path, required=True)
+    parser.add_argument("--task", required=True,
+                    choices=["slice_selection", "inpainting", "rician_denoising", "kspace_accel", "motion"])
+    args = parser.parse_args(args)
     
-    with autocast(device_type="cuda", dtype=torch.float16), torch.inference_mode():
-        dummy = torch.zeros((1, 1, 192, 224, 192), device=device)
-        z_ldm = ae.encode_stage_2_inputs(dummy)
-        latent_shape = tuple(z_ldm.shape[2:])
-        latent_channels = z_ldm.shape[1]
+    device = setup(args)
+    px, ae, latent_channels, latent_shape = build_model(args.strategy, args.weight_root, device)
+    prediction_type = get_prediction_type(args.strategy)
 
-    px = DiffusionModelUNet(
-        spatial_dims=len(latent_shape),
-        in_channels=latent_channels,
-        out_channels=latent_channels,
-        channels=(64, 128, 256, 512),
-        norm_num_groups=8,
-        attention_levels=(False, False, True, True),
-        num_res_blocks=2,
-        num_head_channels=32,
-        use_flash_attention=True,
-        cast_after_norm=True,
-    )
-else:
-    ae = None
-    latent_channels = None
-    latent_shape = None
-    px = DiffusionModelUNet(
-        spatial_dims=3,
-        in_channels=1,
-        out_channels=1,
-        channels=(16, 32, 64, 128, 256),
-        norm_num_groups=8,
-        attention_levels=(False, False, False, False, True),
-        num_res_blocks=2,
-        num_head_channels=8,
-        use_flash_attention=True,
-        cast_after_norm=True,
-    )
+    # ===== Load x and check that it's been preprocessed correctly =====
+    obj = nib.load(args.inp_fpath)
+    if obj.shape != (192, 224, 192):
+        raise ValueError(
+            f"Input image has shape {obj.shape}, expected (192, 224, 192). "
+            f"Please run preprocess.py on '{args.inp_fpath}' first."
+        )
+    x = torch.from_numpy(obj.get_fdata(dtype=np.float32)).unsqueeze(0).unsqueeze(1).to(device)
+    
+    # ===== Simulate y based on the task =====
 
-N_STEPS = 256
+    # Forward models are the deterministic A and a noise model
+    # In this paper, non-Rician tasks use a "No noise Gaussian model"    
+    match args.task:
+        case "slice_selection":
+            # This is a demo script. Feel free to change slice thickness and separation
+            # as well as the axis, based on your preferences. If you choose the A-P axis
+            # make sure to update `hr_shape` as well.
+            A = SliceSelection(hr_shape=192, hr_spacing_mm=1, slice_thickness_mm=7, 
+                               slice_separation_mm=9.5, axis=2, device=device)
+            forward_model = ForwardModel(A)
+            zeta = 20
+        case "inpainting":
+            mask = torch.ones(1, 1, 192, 224, 192, device=device).float()
+            mask[..., 64:-64, 64:-64, 64:-64] = 0 # Feel free to make any mask you wish
+            A = Masking(mask)
+            forward_model = ForwardModel(A)
+            zeta = 20
+        case "rician_denoising":
+            A = Identity()
+            forward_model = ForwardModel(A, "rician", sigma=0.1)
+            zeta = 5e-4 # Rician NLL is on a different scale than usual DPS solving
+        case "kspace_accel":
+            A = KSpaceMasking3D(acceleration=12, center_fraction=0.08, power=4.0)
+            forward_model = ForwardModel(A)
+            zeta = 20
+        case "motion":
+            A = MRIRigidMotion3D(degrees=(6, 6, 6), translation_mm=(6, 6, 6), time=0.45).to(device)
+            forward_model = ForwardModel(A)
+            zeta = 20
 
-px.to(device)
-checkpoint_obj = torch.load(weight_fpaths[prediction_type], weights_only=True, map_location=device)
-px.load_state_dict(checkpoint_obj['model'])
+    # ===== Inverse problem solver scheduler setup =====
+    if args.strategy in ["noise", "velocity"] and args.task != "rician_denoising":
+        zeta = 500 # empirical hyperparameter, sorry
 
-scheduler = DiffusionScheduler(num_train_timesteps=1000, prediction_type=prediction_type)
-scheduler.set_timesteps(num_inference_steps=N_STEPS)
+    if args.strategy == "ldm_rflow":
+        scheduler = ReSampleScheduler(ae=ae, cg_iters=20)
+        scheduler.set_timesteps(num_inference_steps=args.n_steps)
+    else:
+        scheduler = DPSScheduler(num_train_timesteps=1000, prediction_type=prediction_type, zeta=zeta)
+        scheduler.set_timesteps(num_inference_steps=args.n_steps)
 
-img = sample(px, scheduler, device, noise=None, 
-             ae=ae, latent_channels=latent_channels, latent_shape=latent_shape, verbose=True)
+    # ===== Run both forward and inverse, then save =====
+    y = forward_model(x)
+    x_hat = solve(px, y, forward_model, scheduler, device, 
+                  ae=ae, latent_channels=latent_channels, latent_shape=latent_shape,
+                  verbose=args.verbose)
+    to_nib_vol(to_np(x_hat.float()), affine=obj.affine, header=obj.header).to_filename(args.out_fpath)
 
-x = img # start out with a good sample we're happy with
-
-
-
-# Forward models are the deterministic A and a noise model
-# In this paper, non-Rician tasks use a "No noise Gaussian model"
-
-task = "rician_denoising"
-
-match task:
-    case "slice_selection":
-        A = SliceSelection(hr_shape=192, hr_spacing_mm=1, slice_thickness_mm=7, 
-                           slice_separation_mm=9.5, axis=2, device=device)
-        dxyz = (1, 1, 1/9.5)
-        forward_model = ForwardModel(A)
-        zeta = 20
-    case "inpainting":
-        mask = None
-        dxyz = None
-        A = Masking(mask)
-        forward_model = ForwardModel(A)
-        zeta = 20
-    case "rician_denoising":
-        dxyz = None
-        A = Identity()
-        forward_model = ForwardModel(A, "rician", sigma=0.1)
-        zeta = 5e-4 # Rician NLL is on a different scale than usual DPS solving
-    case "kspace_accel":
-        dxyz = None
-        A = KSpaceMasking3D(acceleration=12, center_fraction=0.08, power=4.0)
-        forward_model = ForwardModel(A)
-        zeta = 20
-    case "motion":
-        dxyz = None
-        A = MRIRigidMotion3D(degrees=(6, 6, 6), translation_mm=(6, 6, 6), time=0.45).to(device)
-        forward_model = ForwardModel(A)
-        zeta = 20
-
-scheduler = DPSScheduler(
-    num_train_timesteps=1000, 
-    prediction_type=prediction_type,
-    zeta=zeta,
-    noise_model='gaussian',
-    sigma=None,
-)
-scheduler.set_timesteps(num_inference_steps=N_STEPS)
-
-y = forward_model(x)
-x_hat = solve(px, y, forward_model, scheduler, device)
+if __name__ == "__main__":
+    main()

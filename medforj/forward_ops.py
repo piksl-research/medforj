@@ -93,13 +93,16 @@ class ForwardOperator(nn.Module, ABC):
 
 class ComposedOperator(ForwardOperator):
     """
+    In principle this should work, but I never tested it.
+    Something for future work...
+    
     Compose operators as A = A_k o ... o A_2 o A_1.
-    Take care: order matters.
 
     Example:
         A = ComposedOperator(
-            SliceSelectionSuperResolution1D(...),
-            RicianNoiseObservation(...),
+            MRIRigidMotion3D(...),
+            KSpaceMasking3D(...),
+            SliceSelection(...),
         )
 
         y = A(x)
@@ -317,7 +320,7 @@ class MRIRigidMotion3D(ForwardOperator):
     `time` fraction of k-space lines along the slow phase-encode axis (D). Those lines are acquired
     before the move. The remaining lines, which contain the k-space center, come
     from the original pose. This matches TorchIO for time < 0.5.
-    Nonlinear (resampling + real part), so no adjoint.
+    Nonlinear (magnitude), so no adjoint.
     """
 
     def __init__(

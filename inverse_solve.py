@@ -60,6 +60,10 @@ def main(args=None):
             f"Please run preprocess.py on '{args.inp_fpath}' first."
         )
     x = torch.from_numpy(obj.get_fdata(dtype=np.float32)).unsqueeze(0).unsqueeze(1).to(device)
+    x -= x.min()
+    x /= x.max()
+    x *= 2
+    x -= 1
     
     # ===== Simulate y based on the task =====
 

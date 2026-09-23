@@ -10,6 +10,7 @@ import numpy as np
 import nibabel as nib
 import torch
 from torch.amp import autocast
+from safetensors.torch import load_file
 from monai.networks.nets import DiffusionModelUNet
 from monai.utils import set_determinism
 
@@ -20,12 +21,12 @@ IMG_SHAPE = (192, 224, 192)
 MAISI_CONFIG_FPATH = Path(medforj.__file__).parent / "config_maisi.json"
 # strategy -> weight fname
 WEIGHT_FNAMES = {
-    "noise":     "MedForj-weights-noise.pt",
-    "clean":     "MedForj-weights-clean.pt",
-    "velocity":  "MedForj-weights-velocity.pt",
-    "flow":      "MedForj-weights-flow.pt",
-    "rflow":     "MedForj-weights-rflow.pt",
-    "ldm_rflow": "MedForj-weights-ldm_rflow.pt",
+    "noise":     "MedForj-weights-noise_ema.safetensors",
+    "clean":     "MedForj-weights-clean_ema.safetensors",
+    "velocity":  "MedForj-weights-velocity_ema.safetensors",
+    "flow":      "MedForj-weights-flow_ema.safetensors",
+    "rflow":     "MedForj-weights-rflow_ema.safetensors",
+    "ldm_rflow": "MedForj-weights-ldm_rflow_ema.safetensors",
 }
 
 
@@ -113,14 +114,9 @@ def build_model(strategy, weight_root, device):
             cast_after_norm=True,
         )
 
-
+    state_dict = load_file(weight_root / WEIGHT_FNAMES[strategy])
+    px.load_state_dict(state_dict)
     px = px.to(device).eval()
-    ckpt = torch.load(
-        weight_root / WEIGHT_FNAMES[strategy],
-        weights_only=True,
-        map_location=device,
-    )
-    px.load_state_dict(ckpt["ema"])
 
     return px, ae, latent_channels, latent_shape
 

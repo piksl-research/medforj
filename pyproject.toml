@@ -20,10 +20,15 @@ classifiers = [
 ]
 dependencies = [
     "einops",
+    "huggingface_hub",
     "matplotlib",
     "monai @ git+https://github.com/blakedewey/MONAI@f16_stability_diffusion",
     "nibabel",
     "numpy",
+    "Pillow",
+    "radifox",
+    "safetensors",
+    "scipy",
     "tqdm",
     "torch>=2.0.0",
     "wandb",

@@ -20,6 +20,7 @@ classifiers = [
 ]
 dependencies = [
     "einops",
+    "hd-bet",
     "huggingface_hub",
     "matplotlib",
     "monai @ git+https://github.com/blakedewey/MONAI@f16_stability_diffusion",

@@ -122,14 +122,19 @@ class DiffusionScheduler():
         self.set_timesteps(num_train_timesteps)
 
     def set_timesteps(self, num_inference_steps, device=None):
-        self.num_inference_steps = num_inference_steps
-        timesteps = (
-            np.linspace(0, self.num_train_timesteps - 1, num_inference_steps)
-            .round()[::-1].copy().astype(np.int64)
-        )
-        self._schedule = timesteps.tolist()
-        self._index_of = {t: i for i, t in enumerate(self._schedule)}
-        self.timesteps = torch.from_numpy(timesteps).to(device)
+        self.num_inference_steps = N = num_inference_steps
+        T = self.num_train_timesteps
+        if self.prediction_type == DiffusionPredictionType.RFLOW:
+            # Continuous schedule matching training (MONAI RFlowScheduler,
+            # use_discrete_timesteps=False): t_i = (1 - i/N) T for i = 0..N-1,
+            # i.e. 1000 -> T/N, with the last step landing on s = 0.
+            timesteps = [(1.0 - i / N) * T for i in range(N)]
+            final = 0.0
+        else:
+            timesteps = np.linspace(0, T - 1, N).round()[::-1].astype(np.int64).tolist()
+            final = -1  # coefficients(-1) -> final_alpha_cumprod = 1, so b_s = 0
+        self.timesteps = torch.tensor(timesteps, device=device)  # float32 for rflow, int64 otherwise
+        self.next_timesteps = timesteps[1:] + [final]
 
     def get_velocity(self, sample, noise, timesteps):
         """
@@ -147,7 +152,6 @@ class DiffusionScheduler():
         velocity = sqrt_alpha_prod * noise - sqrt_one_minus_alpha_prod * sample
         return velocity
 
-
     def sample_timesteps(self, x_start):
         """
         Randomly samples training timesteps
@@ -159,19 +163,6 @@ class DiffusionScheduler():
         a = unsqueeze_right(a, original_samples.ndim)
         b = unsqueeze_right(b, original_samples.ndim)
         return a * original_samples + b * noise
-
-    def scheduled_neighbor(self, timestep):
-        t = int(timestep)
-        i = self._index_of.get(t)
-        if i is None:
-            spacing = self.num_train_timesteps // self.num_inference_steps
-            return t - spacing
-        j = i + 1
-        if j < 0:
-            return self.num_train_timesteps
-        if j >= len(self._schedule):
-            return -1
-        return self._schedule[j]
 
     def coefficients(self, timestep):
         """(a_t, b_t) such that x_t = a_t * x_0 + b_t * eps."""
@@ -188,17 +179,17 @@ class DiffusionScheduler():
         a_bar = self.alphas_cumprod.to(t.device)[idx]
         a_bar = torch.where(t < 0, self.final_alpha_cumprod.to(t.device), a_bar)
         return a_bar**0.5, (1 - a_bar)**0.5
-    
-    def step(self, px, t, x_t, eta=0.0, generator=None):
+
+    def step(self, px, t, x_t, step_index, eta=0.0, generator=None):
         with torch.no_grad(), autocast(device_type="cuda", enabled=x_t.is_cuda):
-            px_output = px(x_t, timesteps=torch.full((x_t.shape[0],), t, device=x_t.device))
-    
-        s = self.scheduled_neighbor(t)
+            px_output = px(x_t, timesteps=t.to(x_t.device).repeat(x_t.shape[0]))
+
+        s = self.next_timesteps[step_index]
 
         # Diffusion scalar coefficients
         a_t, b_t = self.coefficients(t)
-        a_s, b_s = self.coefficients(s if s >= 0 else -1)
-
+        a_s, b_s = self.coefficients(s)
+        
         x_0_given_t, ε_hat_t = reparameterize(
             x_t, a_t, b_t, px_output, self.prediction_type,
             clip_min=self.clip_sample_min, clip_max=self.clip_sample_max,
@@ -218,11 +209,8 @@ class DiffusionScheduler():
             x_s = a_s * x_0_given_t + b_s * ε_hat_t
     
         return x_s.detach()
-        
+
     def reverse_de(self, x_t, px, eta=0.0, verbose=True, **kwargs):
-        """
-        Run the reverse differential equation (loop through all steps)
-        """
-        for t in tqdm(self.timesteps, disable=not verbose):
-            x_t = self.step(px, t, x_t, eta=eta, **kwargs)
+        for i, t in enumerate(tqdm(self.timesteps, disable=not verbose)):
+            x_t = self.step(px, t, x_t, step_index=i, eta=eta, **kwargs)
         return x_t

@@ -10,20 +10,15 @@ class DPSScheduler(DiffusionScheduler):
         super().__init__(**kwargs)
         self.zeta = zeta
 
-    def step(self, px, t, x_t, y, forward_model, eta=0.0, generator=None):
-        # Make x_t differentiable for DPS guidance.
-        # The px output is computed without gradients, as usual for DPS.
+    def step(self, px, t, x_t, y, forward_model, step_index, eta=0.0, generator=None):
         x_t = x_t.detach().requires_grad_(True)
-
         with torch.no_grad(), autocast(device_type="cuda", enabled=x_t.is_cuda):
-            px_output = px(x_t, timesteps=torch.full((x_t.shape[0],), t, device=x_t.device))
-    
-        s = self.scheduled_neighbor(t)
+            px_output = px(x_t, timesteps=t.to(x_t.device).repeat(x_t.shape[0]))
 
-        # Diffusion scalar coefficients
+        s = self.next_timesteps[step_index]
         a_t, b_t = self.coefficients(t)
-        a_s, b_s = self.coefficients(s if s >= 0 else -1)
-
+        a_s, b_s = self.coefficients(s)
+        
         x_0_given_t, ε_hat_t = reparameterize(
             x_t, a_t, b_t, px_output, self.prediction_type,
             clip_min=self.clip_sample_min, clip_max=self.clip_sample_max,
@@ -51,13 +46,9 @@ class DPSScheduler(DiffusionScheduler):
         return x_s.detach()
         
     def reverse_de(self, x_t, y, forward_model, px, eta=0.0, verbose=True, **kwargs):
-        """
-        Run the reverse differential equation (loop through all steps)
-        """
-        for t in tqdm(self.timesteps, disable=not verbose):
-            x_t = self.step(px, t, x_t, y, forward_model, eta=eta, **kwargs)
+        for i, t in enumerate(tqdm(self.timesteps, disable=not verbose)):
+            x_t = self.step(px, t, x_t, y, forward_model, step_index=i, eta=eta, **kwargs)
         return x_t
-
 
 def _batch_dot(a, b):
     """Per-sample inner product, shape (B,)."""
@@ -119,18 +110,6 @@ class ReSampleScheduler(DiffusionScheduler):
         self.gd_iters = gd_iters
         self.gd_tol = gd_tol
 
-    def set_timesteps(self, num_inference_steps, device=None):
-        # MONAI RFlowScheduler's continuous schedule: t_i = (1 - i/N) T for
-        # i = 0..N-1 (1000 -> T/N), with the last step going to s = 0. This is
-        # NOT the integer linspace used by the voxel-space priors.
-        self.num_inference_steps = num_inference_steps
-        T = self.num_train_timesteps
-        self.timesteps = torch.tensor(
-            [(1.0 - i / num_inference_steps) * T for i in range(num_inference_steps)],
-            dtype=torch.float32,
-            device=device,
-        )
-
     def is_resample_step(self, step_index):
         # Fixed event COUNT rather than a fixed stride, so the number of lossy
         # encode/decode round-trips does not grow with the step count. The final
@@ -140,7 +119,7 @@ class ReSampleScheduler(DiffusionScheduler):
 
     def step(self, px, t, z_t, y, forward_model, step_index, generator=None):
         N, T = self.num_inference_steps, self.num_train_timesteps
-        s = self.timesteps[step_index + 1] if step_index + 1 < N else 0.0
+        s = self.next_timesteps[step_index]
         τ_t = min(max(float(t) / T, 0.0), 1.0)
         τ_s = min(max(float(s) / T, 0.0), 1.0)
 

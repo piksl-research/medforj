@@ -25,6 +25,7 @@ from medforj.cli_utils import setup, build_model, get_prediction_type, common_pa
 from medforj.forward_ops import ForwardModel, Identity, SliceSelection, Masking, KSpaceMasking3D, MRIRigidMotion3D
 from medforj.inverse_tools import DPSScheduler, ReSampleScheduler
 from medforj.scheduler import DiffusionScheduler
+from radifox.utils.resize.affine import update_affine
 
 def solve(px, y, forward_model, scheduler, device, noise=None,
           ae=None, latent_channels=None, latent_shape=None, verbose=True):
@@ -44,6 +45,7 @@ def solve(px, y, forward_model, scheduler, device, noise=None,
 def main(args=None):
     parser = argparse.ArgumentParser(parents=[common_parser()])
     parser.add_argument("--inp-fpath", type=Path, required=True)
+    parser.add_argument("--y-fpath", type=Path, required=True)
     parser.add_argument("--task", required=True,
                     choices=["slice_selection", "inpainting", "rician_denoising", "kspace_accel", "motion"])
     args = parser.parse_args(args)
@@ -59,6 +61,7 @@ def main(args=None):
             f"Input image has shape {obj.shape}, expected (192, 224, 192). "
             f"Please run preprocess.py on '{args.inp_fpath}' first."
         )
+    affine = obj.affine # used when saving the y image
     x = torch.from_numpy(obj.get_fdata(dtype=np.float32)).unsqueeze(0).unsqueeze(1).to(device)
     x -= x.min()
     x /= x.max()
@@ -74,10 +77,20 @@ def main(args=None):
             # This is a demo script. Feel free to change slice thickness and separation
             # as well as the axis, based on your preferences. If you choose the A-P axis
             # make sure to update `hr_shape` as well.
-            A = SliceSelection(hr_shape=192, hr_spacing_mm=1, slice_thickness_mm=7, 
-                               slice_separation_mm=9.5, axis=2, device=device)
+            lr_axis = 2
+            slice_thickness = 7
+            slice_separation = 9.5
+            A = SliceSelection(hr_shape=192, hr_spacing_mm=1, 
+                               slice_thickness_mm=slice_thickness, 
+                               slice_separation_mm=slice_separation, 
+                               axis=lr_axis, device=device)
             forward_model = ForwardModel(A)
             zeta = 20
+            # We also have to update the affine matrix when saving the y volume
+            # when we increase the slice separation
+            scales[lr_axis] = slice_separation
+            affine = update_affine(affine, scales)
+
         case "inpainting":
             mask = torch.ones(1, 1, 192, 224, 192, device=device).float()
             mask[..., 64:-64, 64:-64, 64:-64] = 0 # Feel free to make any mask you wish
@@ -114,6 +127,7 @@ def main(args=None):
                   ae=ae, latent_channels=latent_channels, latent_shape=latent_shape,
                   verbose=args.verbose)
     to_nib_vol(to_np(x_hat.float()), affine=obj.affine, header=obj.header).to_filename(args.out_fpath)
+    to_nib_vol(to_np(y.float()), affine=affine, header=obj.header).to_filename(args.out_fpath)
 
 if __name__ == "__main__":
     main()

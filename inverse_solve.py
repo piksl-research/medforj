@@ -24,8 +24,6 @@ import torch
 from medforj.cli_utils import setup, build_model, get_prediction_type, common_parser, to_np, to_nib_vol
 from medforj.forward_ops import ForwardModel, Identity, SliceSelection, Masking, KSpaceMasking3D, MRIRigidMotion3D
 from medforj.inverse_tools import DPSScheduler, ReSampleScheduler
-from medforj.scheduler import DiffusionScheduler
-from radifox.utils.resize.affine import update_affine
 
 def solve(px, y, forward_model, scheduler, device, noise=None,
           ae=None, latent_channels=None, latent_shape=None, verbose=True):
@@ -49,6 +47,7 @@ def main(args=None):
     parser.add_argument("--task", required=True,
                     choices=["slice_selection", "inpainting", "rician_denoising", "kspace_accel", "motion"])
     args = parser.parse_args(args)
+    args.y_fpath.parent.mkdir(parents=True, exist_ok=True)
     
     device = setup(args)
     px, ae, latent_channels, latent_shape = build_model(args.strategy, args.weight_root, device)
@@ -88,9 +87,12 @@ def main(args=None):
             zeta = 20
             # We also have to update the affine matrix when saving the y volume
             # when we increase the slice separation
-            scales[lr_axis] = slice_separation
-            affine = update_affine(affine, scales)
-
+            n_out = A.A.shape[0]
+            first = (192 - 1) / 2 - (n_out - 1) / 2 * slice_separation
+            M = np.eye(4)
+            M[lr_axis, lr_axis] = slice_separation
+            M[lr_axis, 3] = first
+            affine = obj.affine @ M
         case "inpainting":
             mask = torch.ones(1, 1, 192, 224, 192, device=device).float()
             mask[..., 64:-64, 64:-64, 64:-64] = 0 # Feel free to make any mask you wish
@@ -127,7 +129,7 @@ def main(args=None):
                   ae=ae, latent_channels=latent_channels, latent_shape=latent_shape,
                   verbose=args.verbose)
     to_nib_vol(to_np(x_hat.float()), affine=obj.affine, header=obj.header).to_filename(args.out_fpath)
-    to_nib_vol(to_np(y.float()), affine=affine, header=obj.header).to_filename(args.out_fpath)
+    to_nib_vol(to_np(y.float()), affine=affine, header=obj.header).to_filename(args.y_fpath)
 
 if __name__ == "__main__":
     main()

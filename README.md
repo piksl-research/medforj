@@ -27,7 +27,11 @@ Each strategy is a separately trained prior. Pass it with `--strategy` and make 
 | `rflow`     | rectified flow x₀ − ε              | image  | `MedForj-weights-rflow_ema.safetensors` |
 | `ldm_rflow` | rectified flow x₀ − ε              | LDM | `MedForj-weights-ldm_rflow_ema.safetensors` |
 
-Download the weights you need from HuggingFace into one folder:
+
+Download the weights from HuggingFace into one folder `/PATH/TO/WEIGHTS`:
+[https://huggingface.co/piksl-research/medforj-brain-t1w-3d](https://huggingface.co/piksl-research/medforj-brain-t1w-3d)
+
+This CLI command can also do it:
 ```
 huggingface-cli download piksl-research/medforj-brain-t1w-3d --local-dir /PATH/TO/WEIGHTS
 ```
@@ -48,7 +52,7 @@ huggingface-cli download piksl-research/medforj-brain-t1w-3d --local-dir /PATH/T
 ## Using MedForj
 Sample an image from the pre-trained weights:
 ```
-python generate_image.py --out-fpath /PATH/TO/OUTPUT/my-new-image.nii.gz --weight-root /PATH/TO/WEIGHTS/ --strategy STRAT --gpu-id 0 --verbose
+python generate_image.py --out-fpath /PATH/TO/OUTPUT/my-new-image.nii.gz --weight-root /PATH/TO/WEIGHTS/ --strategy flow --gpu-id 0 --verbose
 ```
 
 Inverse problem solving requires preprocessing first, then simulates the corrupted image `y` before estimating the restored image `x_hat`:
@@ -56,13 +60,10 @@ Inverse problem solving requires preprocessing first, then simulates the corrupt
 python preprocess.py --inp-fpath raw_t1w.nii.gz --out-fpath prep.nii.gz [--mask-fpath brain_mask.nii.gz]
 
 python inverse_solve.py --inp-fpath prep.nii.gz --task slice_selection \
-    --out-fpath x_hat.nii.gz --y-fpath y.nii.gz --weight-root /PATH/TO/WEIGHTS --strategy flow --gpu-id 0    
+    --out-fpath x_hat.nii.gz --y-fpath y.nii.gz --weight-root /PATH/TO/WEIGHTS --strategy flow --gpu-id 0
 ```
 
-Choose the `strategy` according to the pre-trained weights used.
-
-The EMA weights are available on HuggingFace:
-[https://huggingface.co/piksl-research/medforj-brain-t1w-3d](https://huggingface.co/piksl-research/medforj-brain-t1w-3d)
+Valid tasks: `slice_selection`, `inpainting`, `rician_denoising`, `kspace_accel`, `motion`.
 
 
 ## Training your own model

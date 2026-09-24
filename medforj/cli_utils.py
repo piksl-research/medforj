@@ -71,24 +71,10 @@ def get_prediction_type(strategy):
     return "rflow" if strategy == "ldm_rflow" else strategy
 
 
-def build_model(strategy, weight_root, device):
-    """
-    Build the diffusion UNet (and MAISI autoencoder for LDM) and load EMA weights.
-    Returns (px, ae, latent_channels, latent_shape); the last three are None
-    for pixel-space strategies.
-    """
-    weight_root = Path(weight_root).resolve()
-    ae, latent_channels, latent_shape = None, None, None
-
+def build_unet(strategy, latent_channels=1):
+    """The diffusion UNet for a strategy. Shared by training and inference."""
     if strategy == "ldm_rflow":
-        ae = get_ae(weight_root / "MAISIv1", MAISI_CONFIG_FPATH, device)
-
-        # Probe the latent shape with a dummy encode
-        with amp_ctx(device), torch.inference_mode():
-            z = ae.encode_stage_2_inputs(torch.zeros((1, 1, *IMG_SHAPE), device=device))
-        latent_channels, latent_shape = z.shape[1], tuple(z.shape[2:])
-
-        px = DiffusionModelUNet(
+        return DiffusionModelUNet(
             spatial_dims=3,
             in_channels=latent_channels,
             out_channels=latent_channels,
@@ -100,30 +86,44 @@ def build_model(strategy, weight_root, device):
             use_flash_attention=True,
             cast_after_norm=True,
         )
-    else:
-        px = DiffusionModelUNet(
-            spatial_dims=3,
-            in_channels=1,
-            out_channels=1,
-            channels=(16, 32, 64, 128, 256),
-            norm_num_groups=8,
-            attention_levels=(False, False, False, False, True),
-            num_res_blocks=2,
-            num_head_channels=8,
-            use_flash_attention=True,
-            cast_after_norm=True,
-        )
+    return DiffusionModelUNet(
+        spatial_dims=3,
+        in_channels=1,
+        out_channels=1,
+        channels=(16, 32, 64, 128, 256),
+        norm_num_groups=8,
+        attention_levels=(False, False, False, False, True),
+        num_res_blocks=2,
+        num_head_channels=8,
+        use_flash_attention=True,
+        cast_after_norm=True,
+    )
 
-    state_dict = load_file(weight_root / WEIGHT_FNAMES[strategy])
-    px.load_state_dict(state_dict)
-    px = px.to(device).eval()
+def load_ae(weight_root, device):
+    """MAISI autoencoder plus the latent (channels, shape) it produces for IMG_SHAPE."""
+    ae = get_ae(Path(weight_root) / "MAISIv1", MAISI_CONFIG_FPATH, device)
+    with amp_ctx(device), torch.inference_mode():
+        z = ae.encode_stage_2_inputs(torch.zeros((1, 1, *IMG_SHAPE), device=device))
+    latent_channels, latent_shape = z.shape[1], tuple(z.shape[2:])
+    return ae, latent_channels, latent_shape
 
-    return px, ae, latent_channels, latent_shape
+def build_model(strategy, weight_root, device):
+    """
+    Build the diffusion UNet (and MAISI autoencoder for LDM) and load EMA weights.
+    Returns (px, ae, latent_channels, latent_shape); the last three are None
+    for pixel-space strategies.
+    """
+    weight_root = Path(weight_root).resolve()
+    ae, latent_channels, latent_shape = None, None, None
+    if strategy == "ldm_rflow":
+        ae, latent_channels, latent_shape = load_ae(weight_root, device)
 
+    px = build_unet(strategy, latent_channels or 1)
+    px.load_state_dict(load_file(weight_root / WEIGHT_FNAMES[strategy]))
+    return px.to(device).eval(), ae, latent_channels, latent_shape
 
 def to_np(tensor):
     return tensor.detach().cpu().numpy().squeeze()
-
 
 def to_nib_vol(x, affine=None, header=None):
     """

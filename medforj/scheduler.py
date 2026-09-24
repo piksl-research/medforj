@@ -3,7 +3,7 @@ import torch
 from tqdm.auto import tqdm
 from monai.utils import StrEnum, unsqueeze_right
 from torch.nn import functional
-from torch.amp import GradScaler, autocast
+from torch.amp import autocast
 
 
 class DiffusionPredictionType(StrEnum):
@@ -32,7 +32,7 @@ def reparameterize(
     the two key terms: x_0_given_t and ε_hat_t.
 
     `RFLOW` and `FLOW` have the same formulation with two changes:
-    (i) The direction was trained differently, so we add the px output (see "whoops" above)
+    (i) The direction was trained differently, so we add the px output (see "whoops" in `Scheduler.training_loss`)
     (ii) The coefficients have different values (not VP)
     """
 
@@ -59,37 +59,6 @@ def reparameterize(
 
     return x_0_given_t, ε_hat_t
     
-
-def calc_loss(
-    clean,
-    noise,
-    pred_clean,
-    pred_noise,
-    scheduler,
-    timesteps,
-    loss_type,
-    loss_func=functional.mse_loss,
-):
-
-    match loss_type:
-        case DiffusionPredictionType.NOISE: 
-            loss = loss_func(noise, pred_noise)
-        case DiffusionPredictionType.CLEAN: 
-            loss = loss_func(clean, pred_clean)
-        case DiffusionPredictionType.VELOCITY: 
-            loss = loss_func(
-                scheduler.get_velocity(clean, noise, timesteps),
-                scheduler.get_velocity(pred_clean, pred_noise, timesteps),
-            )
-        case DiffusionPredictionType.FLOW: 
-            loss = loss_func(noise - clean, pred_noise - pred_clean)
-        case DiffusionPredictionType.RFLOW: # Whoops, flipped during training, have to keep flipped here
-            loss = loss_func(clean - noise, pred_clean - pred_noise)
-        case _:
-            raise ValueError("Invalid loss type")
-    return loss
-
-
 class DiffusionScheduler():
     """
     Very simplified version of the MONAI scheduler class. Primary logic is in `step()`.
@@ -105,8 +74,13 @@ class DiffusionScheduler():
         **schedule_args,
     ) -> None:
         super().__init__()
-
         self.prediction_type = prediction_type
+        self.num_train_timesteps = num_train_timesteps
+
+        # Linear-beta VP schedule (MONAI "linear_beta" defaults); unused by rflow.
+        betas = torch.linspace(1e-4, 2e-2, num_train_timesteps, dtype=torch.float32)
+        self.alphas_cumprod = torch.cumprod(1.0 - betas, dim=0)
+
         self.final_alpha_cumprod = torch.tensor(1.0) if set_alpha_to_one else self.alphas_cumprod[0]
         self.first_alpha_cumprod = torch.tensor(0.0) if set_alpha_to_one else self.alphas_cumprod[-1]
         self.init_noise_sigma = 1.0
@@ -118,8 +92,7 @@ class DiffusionScheduler():
             self.clip_sample_min = -1.0
             self.clip_sample_max = 1.0
 
-        self.num_train_timesteps = num_train_timesteps
-        self.set_timesteps(num_train_timesteps)
+        self.set_timesteps(self.num_train_timesteps)
 
     def set_timesteps(self, num_inference_steps, device=None):
         self.num_inference_steps = N = num_inference_steps
@@ -151,13 +124,14 @@ class DiffusionScheduler():
 
         velocity = sqrt_alpha_prod * noise - sqrt_one_minus_alpha_prod * sample
         return velocity
-
+        
     def sample_timesteps(self, x_start):
-        """
-        Randomly samples training timesteps
-        """
-        return torch.randint(0, self.num_train_timesteps, (x_start.shape[0],), device=x_start.device).long()
-
+        """Random training timesteps: continuous for rflow, integer otherwise."""
+        B, T = x_start.shape[0], self.num_train_timesteps
+        if self.prediction_type == DiffusionPredictionType.RFLOW:
+            return torch.rand(B, device=x_start.device) * T
+        return torch.randint(0, T, (B,), device=x_start.device)
+        
     def add_noise(self, original_samples, noise, timesteps):
         a, b = self.coefficients(timesteps.to(original_samples.device))
         a = unsqueeze_right(a, original_samples.ndim)
@@ -165,12 +139,7 @@ class DiffusionScheduler():
         return a * original_samples + b * noise
 
     def coefficients(self, timestep):
-        """(a_t, b_t) such that x_t = a_t * x_0 + b_t * eps."""
-
-        self.betas = torch.linspace(1e-4, 2e-2, self.num_train_timesteps, dtype=torch.float32)
-        self.alphas = 1.0 - self.betas
-        self.alphas_cumprod = torch.cumprod(self.alphas, dim=0)
-        
+        """(a_t, b_t) such that x_t = a_t * x_0 + b_t * eps."""        
         t = torch.as_tensor(timestep, dtype=torch.float32)
         if self.prediction_type == DiffusionPredictionType.RFLOW:
             u = (t / self.num_train_timesteps).clamp(0.0, 1.0)
@@ -180,6 +149,30 @@ class DiffusionScheduler():
         a_bar = torch.where(t < 0, self.final_alpha_cumprod.to(t.device), a_bar)
         return a_bar**0.5, (1 - a_bar)**0.5
 
+    def training_loss(self, px, x_0):
+        """
+        Noise x_0 to a random t and regress px onto the target for its prediction type.
+        This is reparameterize() without clipping, written as the target px should output.
+        """
+        noise = torch.randn_like(x_0)
+        t = self.sample_timesteps(x_0)
+        x_t = self.add_noise(x_0, noise, t)
+        px_output = px(x_t, timesteps=t)
+
+        a, b = (unsqueeze_right(c, x_0.ndim) for c in self.coefficients(t))
+        match self.prediction_type:
+            case DiffusionPredictionType.NOISE:
+                target = noise
+            case DiffusionPredictionType.CLEAN:
+                target = x_0
+            case DiffusionPredictionType.VELOCITY:
+                target = a * noise - b * x_0
+            case DiffusionPredictionType.FLOW:
+                target = noise - x_0
+            case DiffusionPredictionType.RFLOW:  # "whoops": trained as x_0 - noise, with L1
+                return functional.l1_loss(px_output, x_0 - noise)
+        return functional.mse_loss(px_output, target)
+        
     def step(self, px, t, x_t, step_index, eta=0.0, generator=None):
         with torch.no_grad(), autocast(device_type="cuda", enabled=x_t.is_cuda):
             px_output = px(x_t, timesteps=t.to(x_t.device).repeat(x_t.shape[0]))

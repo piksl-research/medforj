@@ -118,6 +118,7 @@ class ReSampleScheduler(DiffusionScheduler):
         return step_index % every == 0 or step_index == self.num_inference_steps - 1
 
     def step(self, px, t, z_t, y, forward_model, step_index, generator=None):
+        T = self.num_train_timesteps
         s = self.next_timesteps[step_index]
         τ_t = min(max(float(t) / T, 0.0), 1.0)
         τ_s = min(max(float(s) / T, 0.0), 1.0)

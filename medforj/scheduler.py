@@ -108,22 +108,6 @@ class DiffusionScheduler():
             final = -1  # coefficients(-1) -> final_alpha_cumprod = 1, so b_s = 0
         self.timesteps = torch.tensor(timesteps, device=device)  # float32 for rflow, int64 otherwise
         self.next_timesteps = timesteps[1:] + [final]
-
-    def get_velocity(self, sample, noise, timesteps):
-        """
-        Exact copy from MONAI's monai.networks.schedulers.Scheduler.get_velocity
-        """
-        # Make sure alphas_cumprod and timestep have same device and dtype as sample
-        self.alphas_cumprod = self.alphas_cumprod.to(device=sample.device, dtype=sample.dtype)
-        timesteps = timesteps.to(sample.device)
-
-        sqrt_alpha_prod = unsqueeze_right(self.alphas_cumprod[timesteps] ** 0.5, sample.ndim)
-        sqrt_one_minus_alpha_prod = unsqueeze_right(
-            (1 - self.alphas_cumprod[timesteps]) ** 0.5, sample.ndim
-        )
-
-        velocity = sqrt_alpha_prod * noise - sqrt_one_minus_alpha_prod * sample
-        return velocity
         
     def sample_timesteps(self, x_start):
         """Random training timesteps: continuous for rflow, integer otherwise."""
@@ -171,6 +155,8 @@ class DiffusionScheduler():
                 target = noise - x_0
             case DiffusionPredictionType.RFLOW:  # "whoops": trained as x_0 - noise, with L1
                 return functional.l1_loss(px_output, x_0 - noise)
+            case _: 
+                raise ValueError(f"Invalid prediction type {self.prediction_type}")
         return functional.mse_loss(px_output, target)
         
     def step(self, px, t, x_t, step_index, eta=0.0, generator=None):

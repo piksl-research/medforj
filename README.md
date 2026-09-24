@@ -1,7 +1,7 @@
 # MedForj: Diffusion-Driven Generation of Minimally Preprocessed Brain MRI
 by [PIKSL](https://piksl-research.github.io/) and [IACL](https://iacl.ece.jhu.edu/).
 
-This repo contains minimal training and inference code for 3D DDPMs with various prediction types (e.g., sample, velocity, and flow) leveraging the [MONAI](https://monai.io/) framework and some custom adjustments.
+This repo contains minimal training and inference code for 3D diffusion models with various strategies (noise prediction, clean prediction, velocity, flow, rectified flow, LDM rectified flow) leveraging the [MONAI](https://monai.io/) framework and some custom adjustments.
 
 ## Quick-start
 
@@ -16,10 +16,15 @@ pip install .
 
 Sample an image from the pre-trained weights:
 ```
-python demo.py --out-fpath {MY_IMG.nii.gz} --weight-fpath {WEIGHTS.pt} --prediction-type {sample/velocity/flow} --gpu-id 0
+python generate_image.py --out-fpath /PATH/TO/OUTPUT/my-new-image.nii.gz --weight-root /PATH/TO/WEIGHTS/ --strategy STRAT --gpu-id 0 --verbose
 ```
 
-Choose the `prediction_type` according to the pre-trained weights used.
+Inverse problem solve:
+```
+python inverse_solve.py --strategy STRAT {--more details...}
+```
+
+Choose the `strategy` according to the pre-trained weights used.
 
 The EMA weights are available on HuggingFace:
 [https://huggingface.co/piksl-research/medforj-brain-t1w-3d](https://huggingface.co/piksl-research/medforj-brain-t1w-3d)
@@ -27,24 +32,22 @@ The EMA weights are available on HuggingFace:
 
 ## Training your own model
 
-Our code uses [Weights and Biases](https://wandb.ai/) for tracking metrics. You can follow their API to disable WandB for your training if you wish. Otherwise, first ensure to log in with your own WandB account.
-
 All data should be within (sub)folders in a particular directory. 
 
-### For single-GPU machines:
+### Single GPU:
 
 If your GPU is large enough, you can run:
 ```
-python -m medforj.train_ddpm --project {YOUR_WANDB_PROJECT} --exp-name {RUN_NAME} --dataset-path {PATH/TO/YOUR/DATA} --output-root {PATH/TO/YOUR/WEIGHTS} --num-epochs 1000 --batch-size 2 --prediction-type flow  --num-workers 12 --disable-amp 
+python -m medforj.train --strategy flow --data-root DATA --out-root RUN --gpu-id 0
 ```
 
-
-### For multi-GPU machines:
+### Multi-GPU (one node):
 
 We support PyTorch DDP. Use this command:
 
 ```
-torchrun --nproc_per_node=4 --standalone -m medforj.train_ddpm --project {YOUR_WANDB_PROJECT} --exp-name {RUN_NAME} --dttaset-path {PATH/TO/YOUR/DATA} --output-root {PATH/TO/YOUR/WEIGHTS} --num-epochs 1000 --batch-size 2 --prediction-type flow  --num-workers 12 --disable-amp
+torchrun --nproc_per_node=8 --standalone -m medforj.train --strategy flow \
+      --data-root DATA --out-root RUN --batch-size 3
 ```
 
 # Citation
@@ -54,7 +57,7 @@ If you find our code or models useful in your work, please consider citing them 
 @misc{medforj-t1,
       title={Diffusion-Driven Generation of Minimally Preprocessed Brain MRI},
       author={Samuel W. Remedios and Aaron Carass and Jerry L. Prince and Blake E. Dewey and others},
-      year={2025},
+      year={2026},
       eprint={todo},
       url={todo},
 }

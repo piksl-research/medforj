@@ -25,7 +25,7 @@ dependencies = [
     "monai @ git+https://github.com/blakedewey/MONAI@f16_stability_diffusion",
     "nibabel",
     "numpy",
-    "radifox",
+    "radifox-utils",
     "safetensors",
     "scipy",
     "tqdm",

@@ -5,13 +5,16 @@ This repo contains minimal training and inference code for 3D diffusion models w
 
 ## Quick-start
 
-Clone the repository, create a new virtual environment (e.g., with miniconda), and pip install the required libraries:
+We recommend using `uv` for installation to automatically handle torch and driver compat.
 ```
-cd $HOME && git clone https://github.com/piksl-research/medforj.git
-cd $HOME/medforj
-conda create -n medforj python==3.11
-conda activate medforj
-pip install .
+
+git clone https://github.com/piksl-research/medforj.git
+cd medforj
+
+uv venv --python 3.11
+source .venv/bin/activate
+uv pip install -e .
+
 ```
 
 ## Strategies and weights

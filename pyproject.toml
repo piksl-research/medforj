@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61.0", 'tomli;python_version<"3.11"']
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,21 +8,19 @@ version = "1.0.0"
 description = "MedForj: An open, large-scale foundational generative prior for high-resolution 3D brain MRI"
 readme = "README.md"
 requires-python = ">=3.11"
-license = {text = "Apache-2.0"}
+license = "Apache-2.0"
 authors = [
-    {name = "JH-MIPC", email = "jhmipc@jh.edu"},
+    { name = "JH-MIPC", email = "jhmipc@jh.edu" },
 ]
-urls = { "Homepage" = "https://github.com/piksl-research/medforj" }
 classifiers = [
     "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: Apache Software License",
     "Operating System :: OS Independent",
 ]
 dependencies = [
     "einops",
     "hd-bet",
     "huggingface_hub",
-    "monai @ git+https://github.com/blakedewey/MONAI@f16_stability_diffusion",
+    "monai @ git+https://github.com/blakedewey/MONAI@4af825cbedb184ff783ae2fc966ae650e1d7b73a",
     "nibabel",
     "numpy",
     "radifox-utils",
@@ -32,5 +30,13 @@ dependencies = [
     "torch>=2.0.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/piksl-research/medforj"
+ 
+# `uv pip install` run from this directory detects the NVIDIA driver and
+# installs the matching PyTorch build (CPU-only if no driver is found).
+[tool.uv.pip]
+torch-backend = "auto"
+ 
 [tool.setuptools.packages.find]
-include = ["medforj"]
+include = ["medforj*"]

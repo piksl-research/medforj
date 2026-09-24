@@ -14,14 +14,49 @@ conda activate medforj
 pip install .
 ```
 
+## Strategies and weights
+
+Each strategy is a separately trained prior. Pass it with `--strategy` and make sure the matching file is in `--weight-root`.
+
+| `--strategy` | Model predicts | Space | Weight file |
+|---|---|---|---|
+| `noise`     | the added noise ε                  | image  | `MedForj-weights-noise_ema.safetensors` |
+| `clean`     | the clean image x₀                 | image  | `MedForj-weights-clean_ema.safetensors` |
+| `velocity`  | velocity v = √ᾱ·ε − √(1−ᾱ)·x₀      | image  | `MedForj-weights-velocity_ema.safetensors` |
+| `flow`      | flow ε − x₀                        | image  | `MedForj-weights-flow_ema.safetensors` |
+| `rflow`     | rectified flow x₀ − ε              | image  | `MedForj-weights-rflow_ema.safetensors` |
+| `ldm_rflow` | rectified flow x₀ − ε              | LDM | `MedForj-weights-ldm_rflow_ema.safetensors` |
+
+Download the weights you need from HuggingFace into one folder:
+```
+huggingface-cli download piksl-research/medforj-brain-t1w-3d --local-dir /PATH/TO/WEIGHTS
+```
+
+`--weight-root` should then look like this:
+```
+/PATH/TO/WEIGHTS/
+├── MedForj-weights-noise_ema.safetensors
+├── MedForj-weights-clean_ema.safetensors
+├── MedForj-weights-velocity_ema.safetensors
+├── MedForj-weights-flow_ema.safetensors
+├── MedForj-weights-rflow_ema.safetensors
+├── MedForj-weights-ldm_rflow_ema.safetensors
+└── MAISIv1/                      # ldm_rflow only; downloaded automatically on first use
+    └── models/autoencoder_v1.pt  # NVIDIA MAISI v1 autoencoder
+```
+
+## Using MedForj
 Sample an image from the pre-trained weights:
 ```
 python generate_image.py --out-fpath /PATH/TO/OUTPUT/my-new-image.nii.gz --weight-root /PATH/TO/WEIGHTS/ --strategy STRAT --gpu-id 0 --verbose
 ```
 
-Inverse problem solve:
+Inverse problem solving requires preprocessing first, then simulates the corrupted image `y` before estimating the restored image `x_hat`:
 ```
-python inverse_solve.py --strategy STRAT {--more details...}
+python preprocess.py --inp-fpath raw_t1w.nii.gz --out-fpath prep.nii.gz [--mask-fpath brain_mask.nii.gz]
+
+python inverse_solve.py --inp-fpath prep.nii.gz --task slice_selection \
+    --out-fpath x_hat.nii.gz --y-fpath y.nii.gz --weight-root /PATH/TO/WEIGHTS --strategy flow --gpu-id 0    
 ```
 
 Choose the `strategy` according to the pre-trained weights used.

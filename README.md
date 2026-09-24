@@ -7,14 +7,13 @@ This repo contains minimal training and inference code for 3D diffusion models w
 
 We recommend using `uv` for installation to automatically handle torch and driver compat.
 ```
-
 git clone https://github.com/piksl-research/medforj.git
 cd medforj
 
+# Install uv if needed: https://docs.astral.sh/uv/getting-started/installation/
 uv venv --python 3.11
 source .venv/bin/activate
 uv pip install -e .
-
 ```
 
 ## Strategies and weights
